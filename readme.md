@@ -1,3 +1,4 @@
+# 从 kschen202115/Port_Debian_for_capricorn fork并修改
 # Ubuntu22.04-server_for_capricorn
 
 把 **Ubuntu22.04-server + 主线 Linux 6.19** 移植到 **Xiaomi Mi 5s（capricorn / MSM8996 Pro）**。
