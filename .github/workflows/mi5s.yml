@@ -65,6 +65,7 @@ jobs:
           echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports/ jammy-security main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list
           echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports/ jammy-backports main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list
 
+          # 添加 ARM64 架构支持
           sudo dpkg --add-architecture arm64
           sudo -E apt-get -qq update || true
           sudo -E apt-get -qq install -y binfmt-support qemu-user-static abootimg fakeroot simg2img img2simg mkbootimg android-sdk-libsparse-utils bison flex gcc-aarch64-linux-gnu pkg-config libdw-dev:native libelf-dev libncurses-dev libssl-dev:native libssl-dev:arm64 pahole rsync xz-utils zstd unzip git bc devscripts debhelper openssl patch
@@ -103,10 +104,12 @@ jobs:
           make clean
           make mrproper
 
-          # 忽略权限警告
           git config core.fileMode false
 
-          # 使用 patch -p1 来打补丁，容忍上下文和权限变化，防止因为一个小警告导致全盘崩溃
+          # 彻底删除 0011 补丁，防止脚本误触
+          rm -f 0011-ASoC-tfa989x-add-support-for-TFA9891.patch
+
+          # 应用其他补丁
           patch -p1 < 0002-capricorn-td4722-panel-support.patch
           patch -p1 < 0003-arm64-dts-qcom-capricorn-set-sound-card-model.patch
           patch -p1 < 0004-media-venus-hfi_cmds-pack-H264_TRANSFORM_8X8-in-1x.patch
@@ -114,9 +117,44 @@ jobs:
           patch -p1 < 0007-arm64-dts-qcom-capricorn-add-rear-camera-imx378.patch
           patch -p1 < 0008-media-i2c-add-imx378-sensor-driver.patch
           patch -p1 < 0009-arm64-dts-qcom-capricorn-fix-rpm-regulators-node-name.patch
-          patch -p1 < 0011-ASoC-tfa989x-add-support-for-TFA9891.patch
           patch -p1 < 0012-ASoC-qcom-apq8096-add-MI2S-clock-and-format-setup.patch
           patch -p1 < 0013-arm64-dts-qcom-capricorn-add-tfa9891-speaker.patch
+
+          # 用 Python 精准修改源码，完美模拟原补丁的功能
+          python3 - <<'PYEOF'
+import re
+file_path = 'sound/soc/codecs/tfa989x.c'
+print("正在修改:", file_path)
+
+with open(file_path, 'r') as f:
+    content = f.read()
+
+# 1. 插入 TFA9891_REVISION 宏定义
+# 匹配 #define TFA9890_REVISION 后面跟着任意空白字符和 0x80
+content = re.sub(r'(#define TFA9890_REVISION\s+0x80)', r'\1\n#define TFA9891_REVISION\t\t0x92', content)
+
+# 2. 插入 tfa9891_rev 结构体
+struct_code = """
+/* TFA9891 is register compatible with TFA9890 for the parts used here */
+static const struct tfa989x_rev tfa9891_rev = {
+	.rev	= TFA9891_REVISION,
+	.init	= tfa9890_init,
+};
+"""
+# 匹配 tfa9890_rev 整个结构体直到结尾的 };
+content = re.sub(r'(static const struct tfa989x_rev tfa9890_rev = \{.*?\n\};)', r'\1\n' + struct_code, content, flags=re.DOTALL)
+
+# 3. 增加 of_device_id 匹配
+content = content.replace('{ .compatible = "nxp,tfa9890", .data = &tfa9890_rev },', '{ .compatible = "nxp,tfa9890", .data = &tfa9890_rev },\n\t{ .compatible = "nxp,tfa9891", .data = &tfa9891_rev },')
+
+with open(file_path, 'w') as f:
+    f.write(content)
+print("修改完成。")
+PYEOF
+
+          # 验证修改是否成功
+          echo "=== 检查 tfa989x.c 修改情况 ==="
+          grep -n "TFA9891" sound/soc/codecs/tfa989x.c
 
           awk '!/^dtb-\$\(CONFIG_ARCH_QCOM\).*+=/ || /msm8996pro-xiaomi-capricorn-td4722\.dtb/' \
               arch/arm64/boot/dts/qcom/Makefile > arch/arm64/boot/dts/qcom/Makefile.capricorn
