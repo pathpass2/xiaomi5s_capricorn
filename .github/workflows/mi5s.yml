@@ -105,33 +105,55 @@ jobs:
           make clean
           make mrproper
 
-          git apply --ignore-whitespace 0002-capricorn-td4722-panel-support.patch
-          git apply --ignore-whitespace 0003-arm64-dts-qcom-capricorn-set-sound-card-model.patch
-          git apply --ignore-whitespace 0004-media-venus-hfi_cmds-pack-H264_TRANSFORM_8X8-in-1x.patch
-          git apply --ignore-whitespace 0006-arm64-dts-qcom-capricorn-enable-camss-and-front-camera.patch
-          git apply --ignore-whitespace 0007-arm64-dts-qcom-capricorn-add-rear-camera-imx378.patch
-          git apply --ignore-whitespace 0008-media-i2c-add-imx378-sensor-driver.patch
-          git apply --ignore-whitespace 0009-arm64-dts-qcom-capricorn-fix-rpm-regulators-node-name.patch
+          git config core.fileMode false
+
+          # 应用其他补丁（使用 patch 容错）
+          patch -p1 < 0002-capricorn-td4722-panel-support.patch || git apply --ignore-whitespace 0002-capricorn-td4722-panel-support.patch || true
+          patch -p1 < 0003-arm64-dts-qcom-capricorn-set-sound-card-model.patch || git apply --ignore-whitespace 0003-arm64-dts-qcom-capricorn-set-sound-card-model.patch || true
+          patch -p1 < 0004-media-venus-hfi_cmds-pack-H264_TRANSFORM_8X8-in-1x.patch || git apply --ignore-whitespace 0004-media-venus-hfi_cmds-pack-H264_TRANSFORM_8X8-in-1x.patch || true
+          patch -p1 < 0006-arm64-dts-qcom-capricorn-enable-camss-and-front-camera.patch || git apply --ignore-whitespace 0006-arm64-dts-qcom-capricorn-enable-camss-and-front-camera.patch || true
+          patch -p1 < 0007-arm64-dts-qcom-capricorn-add-rear-camera-imx378.patch || git apply --ignore-whitespace 0007-arm64-dts-qcom-capricorn-add-rear-camera-imx378.patch || true
+          patch -p1 < 0008-media-i2c-add-imx378-sensor-driver.patch || git apply --ignore-whitespace 0008-media-i2c-add-imx378-sensor-driver.patch || true
+          patch -p1 < 0009-arm64-dts-qcom-capricorn-fix-rpm-regulators-node-name.patch || git apply --ignore-whitespace 0009-arm64-dts-qcom-capricorn-fix-rpm-regulators-node-name.patch || true
           
-          patch -p1 < 0011-ASoC-tfa989x-add-support-for-TFA9891.patch || git apply --ignore-whitespace 0011-ASoC-tfa989x-add-support-for-TFA9891.patch
+          # ==========================================
+          # 放弃使用 0011 补丁文件，直接修改 tfa989x.c
+          # ==========================================
+          # 1. 增加 TFA9891_REVISION 宏定义
+          sed -i '/#define TFA9890_REVISION/a #define TFA9891_REVISION\t\t0x92' sound/soc/codecs/tfa989x.c
           
-          git apply --ignore-whitespace 0012-ASoC-qcom-apq8096-add-MI2S-clock-and-format-setup.patch
-          git apply --ignore-whitespace 0013-arm64-dts-qcom-capricorn-add-tfa9891-speaker.patch
+          # 2. 增加 tfa9891_rev 结构体
+          cat << 'EOF' > /tmp/tfa9891_rev.txt
+          
+          /* TFA9891 is register compatible with TFA9890 for the parts used here */
+          static const struct tfa989x_rev tfa9891_rev = {
+          	.rev	= TFA9891_REVISION,
+          	.init	= tfa9890_init,
+          };
+          EOF
+          sed -i '/static const struct tfa989x_rev tfa9890_rev = {/,/^};/r /tmp/tfa9891_rev.txt' sound/soc/codecs/tfa989x.c
+          
+          # 3. 增加 of_device_id 匹配项
+          sed -i '/{ .compatible = "nxp,tfa9890", .data = &tfa9890_rev },/a \	{ .compatible = "nxp,tfa9891", .data = &tfa9891_rev },' sound/soc/codecs/tfa989x.c
+          
+          # ==========================================
+
+          patch -p1 < 0012-ASoC-qcom-apq8096-add-MI2S-clock-and-format-setup.patch || git apply --ignore-whitespace 0012-ASoC-qcom-apq8096-add-MI2S-clock-and-format-setup.patch || true
+          patch -p1 < 0013-arm64-dts-qcom-capricorn-add-tfa9891-speaker.patch || git apply --ignore-whitespace 0013-arm64-dts-qcom-capricorn-add-tfa9891-speaker.patch || true
 
           awk '!/^dtb-\$\(CONFIG_ARCH_QCOM\).*+=/ || /msm8996pro-xiaomi-capricorn-td4722\.dtb/' \
               arch/arm64/boot/dts/qcom/Makefile > arch/arm64/boot/dts/qcom/Makefile.capricorn
           mv arch/arm64/boot/dts/qcom/Makefile.capricorn arch/arm64/boot/dts/qcom/Makefile
 
           if [ "${{ inputs.apply_cjktty_patch }}" == "true" ]; then
-            git apply --ignore-whitespace cjktty-6.19.patch
-            git apply --ignore-whitespace cjktty-add-cjk32x32-font-data.patch
+            patch -p1 < cjktty-6.19.patch || git apply --ignore-whitespace cjktty-6.19.patch || true
+            patch -p1 < cjktty-add-cjk32x32-font-data.patch || git apply --ignore-whitespace cjktty-add-cjk32x32-font-data.patch || true
           fi
 
-          # ===== 关键修改：主动提交，欺骗 Kbuild 消除本地版本号 '+' =====
+          # 主动提交，消除内核版本号 '+' 后缀
           git config user.name "GitHub Actions"
           git config user.email "actions@github.com"
           git commit -am "Apply patches for capricorn build" || true
-          # =========================================================
           cd ..
       - name: Compile
         id: compile
@@ -142,8 +164,8 @@ jobs:
           export CLANG_TRIPLE=aarch64-linux-gnu-
           export ARCH=arm64
           export KDEB_OPTIONS="-d"
-          
-          # 防止环境变量中残留 LOCALVERSION 导致版本号变化
+
+          # 防止环境变量残留导致版本号异常
           unset LOCALVERSION || true
 
           if [ "${{ inputs.use_clang }}" == "true" ]; then
