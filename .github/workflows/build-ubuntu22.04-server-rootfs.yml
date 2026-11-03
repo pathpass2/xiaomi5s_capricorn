@@ -25,10 +25,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Setup tmate session
-        uses: mxschmitt/action-tmate@v3
-        with:
-            detached: true
+
+      # tmate 已移除，以免无超时导致卡死。
+      # 如需调试，请取消下方注释并务必设置超时：
+      # - name: Setup tmate session
+      #   uses: mxschmitt/action-tmate@v3
+      #   timeout-minutes: 15
+      #   with:
+      #       detached: true
 
       - name: 安装依赖
         run: |
