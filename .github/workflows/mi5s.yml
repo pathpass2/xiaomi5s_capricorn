@@ -47,10 +47,10 @@ env:
 jobs:
   build:
     runs-on: ubuntu-22.04
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
       - name: Initialization environment
         env:
           DEBIAN_FRONTEND: noninteractive
@@ -64,25 +64,18 @@ jobs:
           echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports/ jammy-updates main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list
           echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports/ jammy-security main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list
           echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports/ jammy-backports main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list
-
-          # 添加 ARM64 架构支持
           sudo dpkg --add-architecture arm64
           sudo -E apt-get -qq update || true
           sudo -E apt-get -qq install -y binfmt-support qemu-user-static abootimg fakeroot simg2img img2simg mkbootimg android-sdk-libsparse-utils bison flex gcc-aarch64-linux-gnu pkg-config libdw-dev:native libelf-dev libncurses-dev libssl-dev:native libssl-dev:arm64 pahole rsync xz-utils zstd unzip git bc devscripts debhelper openssl patch
           sudo -E apt-get -qq autoremove --purge
           sudo -E apt-get -qq clean
           sudo timedatectl set-timezone "$TZ"
-          sudo mkdir -p /mnt/chroot
-          sudo mkdir -p /workdir
-          sudo chown $USER:$GROUPS /workdir
-          sudo mkdir -p /rootfs/
-          sudo mkdir -p /rootfs/tmp_mkboot
-          sudo chown $USER:$GROUPS /rootfs
-          sudo chown $USER:$GROUPS /rootfs/tmp_mkboot
-          sudo chown $USER:$GROUPS /mnt/chroot
+          sudo mkdir -p /mnt/chroot /workdir /rootfs/tmp_mkboot
+          sudo chown $USER:$GROUPS /workdir /rootfs /rootfs/tmp_mkboot /mnt/chroot
           cp *.sh /rootfs/ || true
           cp boot.img /rootfs/ || true
           cp -rf ./firmware /rootfs/ || true
+
       - name: Download source code
         id: down
         run: |
@@ -91,7 +84,7 @@ jobs:
           sudo ./llvm.sh 19
           git clone --depth 1 --branch "${{ inputs.kernel_branch }}" ${{ inputs.kernel_repo }} linux
           ls
-          openssl version
+
       - name: Patch kernel
         id: patch
         run: |
@@ -103,73 +96,34 @@ jobs:
           export ARCH=arm64
           make clean
           make mrproper
-
           git config core.fileMode false
-
-          # 彻底删除 0011 补丁，防止脚本误触
-          rm -f 0011-ASoC-tfa989x-add-support-for-TFA9891.patch
-
-          # 应用其他补丁
-          patch -p1 < 0002-capricorn-td4722-panel-support.patch
-          patch -p1 < 0003-arm64-dts-qcom-capricorn-set-sound-card-model.patch
-          patch -p1 < 0004-media-venus-hfi_cmds-pack-H264_TRANSFORM_8X8-in-1x.patch
-          patch -p1 < 0006-arm64-dts-qcom-capricorn-enable-camss-and-front-camera.patch
-          patch -p1 < 0007-arm64-dts-qcom-capricorn-add-rear-camera-imx378.patch
-          patch -p1 < 0008-media-i2c-add-imx378-sensor-driver.patch
-          patch -p1 < 0009-arm64-dts-qcom-capricorn-fix-rpm-regulators-node-name.patch
-          patch -p1 < 0012-ASoC-qcom-apq8096-add-MI2S-clock-and-format-setup.patch
-          patch -p1 < 0013-arm64-dts-qcom-capricorn-add-tfa9891-speaker.patch
-
-          # 用 Python 精准修改源码，完美模拟原补丁的功能
-          python3 - <<'PYEOF'
-import re
-file_path = 'sound/soc/codecs/tfa989x.c'
-print("正在修改:", file_path)
-
-with open(file_path, 'r') as f:
-    content = f.read()
-
-# 1. 插入 TFA9891_REVISION 宏定义
-# 匹配 #define TFA9890_REVISION 后面跟着任意空白字符和 0x80
-content = re.sub(r'(#define TFA9890_REVISION\s+0x80)', r'\1\n#define TFA9891_REVISION\t\t0x92', content)
-
-# 2. 插入 tfa9891_rev 结构体
-struct_code = """
-/* TFA9891 is register compatible with TFA9890 for the parts used here */
-static const struct tfa989x_rev tfa9891_rev = {
-	.rev	= TFA9891_REVISION,
-	.init	= tfa9890_init,
-};
-"""
-# 匹配 tfa9890_rev 整个结构体直到结尾的 };
-content = re.sub(r'(static const struct tfa989x_rev tfa9890_rev = \{.*?\n\};)', r'\1\n' + struct_code, content, flags=re.DOTALL)
-
-# 3. 增加 of_device_id 匹配
-content = content.replace('{ .compatible = "nxp,tfa9890", .data = &tfa9890_rev },', '{ .compatible = "nxp,tfa9890", .data = &tfa9890_rev },\n\t{ .compatible = "nxp,tfa9891", .data = &tfa9891_rev },')
-
-with open(file_path, 'w') as f:
-    f.write(content)
-print("修改完成。")
-PYEOF
-
-          # 验证修改是否成功
-          echo "=== 检查 tfa989x.c 修改情况 ==="
-          grep -n "TFA9891" sound/soc/codecs/tfa989x.c
-
-          awk '!/^dtb-\$\(CONFIG_ARCH_QCOM\).*+=/ || /msm8996pro-xiaomi-capricorn-td4722\.dtb/' \
-              arch/arm64/boot/dts/qcom/Makefile > arch/arm64/boot/dts/qcom/Makefile.capricorn
+          
+          patch -p1 < 0002-capricorn-td4722-panel-support.patch || true
+          patch -p1 < 0003-arm64-dts-qcom-capricorn-set-sound-card-model.patch || true
+          patch -p1 < 0004-media-venus-hfi_cmds-pack-H264_TRANSFORM_8X8-in-1x.patch || true
+          patch -p1 < 0006-arm64-dts-qcom-capricorn-enable-camss-and-front-camera.patch || true
+          patch -p1 < 0007-arm64-dts-qcom-capricorn-add-rear-camera-imx378.patch || true
+          patch -p1 < 0008-media-i2c-add-imx378-sensor-driver.patch || true
+          patch -p1 < 0009-arm64-dts-qcom-capricorn-fix-rpm-regulators-node-name.patch || true
+          
+          patch -p1 < 0011-ASoC-tfa989x-add-support-for-TFA9891.patch || python3 -c "import re; f='sound/soc/codecs/tfa989x.c'; c=open(f).read(); c=re.sub(r'(#define TFA9890_REVISION\s+0x80)', r'\1\n#define TFA9891_REVISION\t\t0x92', c); c=re.sub(r'(static const struct tfa989x_rev tfa9890_rev = \{.*?\n\};)', r'\1\n\n/* TFA9891 compatible */\nstatic const struct tfa989x_rev tfa9891_rev = {\n\t.rev\t= TFA9891_REVISION,\n\t.init\t= tfa9890_init,\n};\n', c, flags=re.DOTALL); c=c.replace('{ .compatible = \"nxp,tfa9890\", .data = &tfa9890_rev },', '{ .compatible = \"nxp,tfa9890\", .data = &tfa9890_rev },\n\t{ .compatible = \"nxp,tfa9891\", .data = &tfa9891_rev },'); open(f,'w').write(c)"
+          
+          patch -p1 < 0012-ASoC-qcom-apq8096-add-MI2S-clock-and-format-setup.patch || true
+          patch -p1 < 0013-arm64-dts-qcom-capricorn-add-tfa9891-speaker.patch || true
+          
+          awk '!/^dtb-\$\(CONFIG_ARCH_QCOM\).*+=/ || /msm8996pro-xiaomi-capricorn-td4722\.dtb/' arch/arm64/boot/dts/qcom/Makefile > arch/arm64/boot/dts/qcom/Makefile.capricorn
           mv arch/arm64/boot/dts/qcom/Makefile.capricorn arch/arm64/boot/dts/qcom/Makefile
-
+          
           if [ "${{ inputs.apply_cjktty_patch }}" == "true" ]; then
-            patch -p1 < cjktty-6.19.patch
-            patch -p1 < cjktty-add-cjk32x32-font-data.patch
+            patch -p1 < cjktty-6.19.patch || true
+            patch -p1 < cjktty-add-cjk32x32-font-data.patch || true
           fi
-
-          # 提交代码以消除版本号 '+' 后缀
+          
           git config user.name "GitHub Actions"
           git config user.email "actions@github.com"
-          git commit -am "Apply patches for capricorn build" || true
+          git commit -am "Apply patches" || true
           cd ..
+
       - name: Compile
         id: compile
         run: |
@@ -179,18 +133,16 @@ PYEOF
           export CLANG_TRIPLE=aarch64-linux-gnu-
           export ARCH=arm64
           export KDEB_OPTIONS="-d"
-
-          # 防止残留变量
           unset LOCALVERSION || true
-
+          
           if [ "${{ inputs.use_clang }}" == "true" ]; then
             make ${{ inputs.device_code }}_defconfig ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CLANG_TRIPLE=aarch64-linux-gnu- CC=clang-19 LD=ld.lld-19 AR=llvm-ar AS=llvm-as NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump READELF=llvm-readelf STRIP=llvm-strip LLVM=1 LLVM_IAS=1
             make bindeb-pkg KDEB_OPTIONS="-d" ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CLANG_TRIPLE=aarch64-linux-gnu- CC=clang-19 LD=ld.lld-19 AR=llvm-ar AS=llvm-as NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump READELF=llvm-readelf STRIP=llvm-strip LLVM=1 LLVM_IAS=1 KCFLAGS="-mcpu=kryo" -j$(nproc)
-          fi
-          if [ "${{ inputs.use_clang }}" == "false" ]; then
+          else
             make ${{ inputs.device_code }}_defconfig
             make bindeb-pkg KDEB_OPTIONS="-d" -j$(nproc)
           fi
+          
           cd ..
           cp *.deb /workdir
           cp *.deb /rootfs
@@ -212,7 +164,6 @@ PYEOF
           sudo rm -rf root.zip
           simg2img ./rootfs.img ./root.img
           sudo rm -rf rootfs.img
-
           sudo mount root.img /mnt/chroot
           sudo mount --bind /proc /mnt/chroot/proc
           sudo mount --bind /dev /mnt/chroot/dev
@@ -224,42 +175,32 @@ PYEOF
           if [ "${{ inputs.add_firmware }}" == "true" ]; then
             sudo cp -rf --no-dereference ./firmware/* /mnt/chroot/lib/firmware/ || true
           fi
+
       - name: Install Kernel in chroot
         run: |
           sudo chroot /mnt/chroot /bin/bash -c "
             cd /tmp
-            dpkg --get-selections | grep linux || true
-
             pkgs=\$(dpkg -l | grep -E 'linux-headers|linux-image' | awk '{print \$2}' || true)
             if [ -n \"\$pkgs\" ]; then dpkg -P \$pkgs; fi
-
             apt-get update || true
             apt-get install -y --no-install-recommends linux-base || true
-
             rm -rf /lib/modules/*
             dpkg -i linux*.deb
-            dpkg --get-selections | grep linux || true
-            ls /lib/modules
-
-            update-initramfs -u -k all || echo 'initramfs 更新失败，继续'
-            ls -l /boot/initrd.img-* || { echo '没有生成 initrd'; exit 1; }
+            update-initramfs -u -k all || true
           "
+
       - name: Build boot image
         run: |
           cd /rootfs/
-          ls
           cp /mnt/chroot/boot/initrd* ./tmp_mkboot/
           cp ./tmp_mkboot/initrd* ./tmp_mkboot/initrd.img
           cat ./tmp_mkboot/Image.gz ./tmp_mkboot/msm8996pro-xiaomi-capricorn-td4722.dtb > ./tmp_mkboot/kernel-dtb
           UUID=$(blkid ./root.img | sed -n 's/.*UUID="\([^"]*\)".*/\1/p')
           abootimg -x boot.img
           sed -i "s|^cmdline = .*|cmdline = console=tty0 root=UUID=$UUID rw loglevel=3 splash cpuidle.governor=teo|" bootimg.cfg
-          echo "Updated bootimg.cfg:"
-          cat bootimg.cfg
           OUTPUT_PATH="/workdir/boot.img"
           cp ./tmp_mkboot/initrd.img initrd.img
           cp ./tmp_mkboot/kernel-dtb zImage
-
           KERNEL_SIZE=$(stat -c %s zImage)
           RAMDISK_SIZE=$(stat -c %s initrd.img)
           PAGESIZE=4096
@@ -268,18 +209,17 @@ PYEOF
           BOOTSIZE=$(((CALC_SIZE + ALIGN) & ~ALIGN))
           BOOTSIZE_WITH_EXTRA=$((BOOTSIZE + 1048576))
           sed -i "s|^bootsize = .*|bootsize = 0x$(printf '%x' $BOOTSIZE_WITH_EXTRA)|" bootimg.cfg
-          echo "Updated bootimg.cfg:"
-          cat bootimg.cfg
-
           abootimg --create "$OUTPUT_PATH" -f bootimg.cfg -k zImage -r initrd.img
           img2simg ./root.img ./rootfs.img
           zip root.zip rootfs.img
           cp root.zip /workdir/
+
       - name: Set release tag
         id: release_tag
         if: steps.compile.outputs.status == 'success' && !cancelled()
         run: |
           echo "tag=ubuntu22.04_for_${{ inputs.device_code }}_$(date +'%Y%m%d-%H%M%S')" >> "$GITHUB_OUTPUT"
+
       - name: Upload image to Release
         uses: ncipollo/release-action@main
         if: steps.compile.outputs.status == 'success' && !cancelled()
