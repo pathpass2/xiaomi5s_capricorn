@@ -106,7 +106,6 @@ jobs:
           patch -p1 < 0008-media-i2c-add-imx378-sensor-driver.patch || true
           patch -p1 < 0009-arm64-dts-qcom-capricorn-fix-rpm-regulators-node-name.patch || true
           
-          # 尝试打 0011 补丁，失败则用 Python 强改
           patch -p1 < 0011-ASoC-tfa989x-add-support-for-TFA9891.patch || python3 -c "import re; f='sound/soc/codecs/tfa989x.c'; c=open(f).read(); c=re.sub(r'(#define TFA9890_REVISION\s+0x80)', r'\1\n#define TFA9891_REVISION\t\t0x92', c); c=re.sub(r'(static const struct tfa989x_rev tfa9890_rev = \{.*?\n\};)', r'\1\n\n/* TFA9891 compatible */\nstatic const struct tfa989x_rev tfa9891_rev = {\n\t.rev\t= TFA9891_REVISION,\n\t.init\t= tfa9890_init,\n};\n', c, flags=re.DOTALL); c=c.replace('{ .compatible = \"nxp,tfa9890\", .data = &tfa9890_rev },', '{ .compatible = \"nxp,tfa9890\", .data = &tfa9890_rev },\n\t{ .compatible = \"nxp,tfa9891\", .data = &tfa9891_rev },'); open(f,'w').write(c)"
           
           patch -p1 < 0012-ASoC-qcom-apq8096-add-MI2S-clock-and-format-setup.patch || true
@@ -136,17 +135,12 @@ jobs:
           export ARCH=arm64
           export KDEB_OPTIONS="-d"
           
-          # 消除所有可能导致 '+' 的变量
           unset LOCALVERSION || true
           unset CONFIG_LOCALVERSION || true
 
-          # ==========================================
-          # 终极反制：直接清空 Kbuild 检查本地版本的脚本内容
-          # 这样它就不会再给内核版本加上 '+' 了
-          # ==========================================
-          echo '#!/bin/sh' > scripts/setlocalversion
-          echo 'echo ""' >> scripts/setlocalversion
-          chmod +x scripts/setlocalversion
+          # 删掉 setlocalversion 脚本里所有追加 '+' 的逻辑（用 sed 替换，不破坏文件结构）
+          sed -i 's|echo "+"|echo ""|g' scripts/setlocalversion
+          sed -i 's|printf "+"|true|g' scripts/setlocalversion
           
           if [ "${{ inputs.use_clang }}" == "true" ]; then
             make ${{ inputs.device_code }}_defconfig ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CLANG_TRIPLE=aarch64-linux-gnu- CC=clang-19 LD=ld.lld-19 AR=llvm-ar AS=llvm-as NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump READELF=llvm-readelf STRIP=llvm-strip LLVM=1 LLVM_IAS=1
