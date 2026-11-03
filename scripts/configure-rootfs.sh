@@ -15,6 +15,26 @@ export LC_ALL=C
 trap 'echo "configure-rootfs.sh: 第 $LINENO 行失败" >&2' ERR
 
 # ---------------------------------------------------------------------------
+# 强制配置源和 DNS（必须在 apt-get update 之前）
+# ---------------------------------------------------------------------------
+echo "=============== 强制配置源和 DNS ==============="
+
+# 写入强制覆盖的源（使用 http 防止 UB Base 缺少 ca-certificates 报错）
+cat > /etc/apt/sources.list <<EOF
+deb http://${APT_MIRROR}/ubuntu-ports/ jammy main restricted universe multiverse
+deb http://${APT_MIRROR}/ubuntu-ports/ jammy-updates main restricted universe multiverse
+deb http://${APT_MIRROR}/ubuntu-ports/ jammy-backports main restricted universe multiverse
+deb http://${APT_MIRROR}/ubuntu-ports/ jammy-security main restricted universe multiverse
+EOF
+
+# 强制覆盖 DNS，解决可能存在的解析失败问题
+rm -f /etc/resolv.conf
+cat > /etc/resolv.conf <<EOF
+nameserver 223.5.5.5
+nameserver 119.29.29.29
+EOF
+
+# ---------------------------------------------------------------------------
 # 小工具
 # ---------------------------------------------------------------------------
 require_file() {
@@ -39,8 +59,6 @@ sed_assert() {
 echo "=============== 安装软件包 ==============="
 # ---------------------------------------------------------------------------
 apt-get update
-# Ubuntu 22.04 与 Debian 包名基本一致；这里保留原列表，
-# 仅把 Debian 专有的 console-setup 保留（Ubuntu 也有）。
 apt-get install -y --no-install-recommends \
     locales \
     console-setup kbd fonts-dejavu \
@@ -89,8 +107,7 @@ if ! id "$USERNAME" >/dev/null 2>&1; then
 fi
 echo "${USERNAME}:${USER_PASSWORD}" | chpasswd
 
-# 加入 sudo 组（要求：具有 sudo）。Ubuntu 默认 sudo 组已存在，
-# 这里仍做存在性判断，保持与原有逻辑一致。
+# 加入 sudo 组
 for g in sudo video input audio dialout plugdev; do
     if getent group "$g" >/dev/null; then
         usermod -aG "$g" "$USERNAME"
@@ -99,7 +116,7 @@ for g in sudo video input audio dialout plugdev; do
     fi
 done
 
-# 密码 1234 已是明文，无需再强制改密；若希望 sudo 免密可取消下面这行注释
+# 设置 sudo 免密
 echo "${USERNAME} ALL=(ALL) NOPASSWD:ALL" > "/etc/sudoers.d/${USERNAME}"
 chmod 440 "/etc/sudoers.d/${USERNAME}"
 
@@ -183,7 +200,6 @@ if [ -x /usr/bin/hkdm ]; then
 else
     echo "警告：/usr/bin/hkdm 不存在，跳过 hkdm.service" >&2
 fi
-# buffyboard 不 enable —— 由 power.sh 按需 start/stop
 
 # ---------------------------------------------------------------------------
 echo "=============== initramfs ==============="
@@ -191,33 +207,10 @@ echo "=============== initramfs ==============="
 update-initramfs -u || echo "update-initramfs 失败（无内核时属正常）"
 
 # ---------------------------------------------------------------------------
-echo "=============== APT 源兜底 ==============="
-# ---------------------------------------------------------------------------
-# Ubuntu 22.04 的源已在 workflow 中写为 ubuntu-ports（中科大）。
-# 这里只做兜底：若 sources.list 仍指向官方域名，统一替换成镜像。
-if [ -f /etc/apt/sources.list ]; then
-    sed -i "s|archive\.ubuntu\.com|${APT_MIRROR}/ubuntu-ports|g; \
-            s|ports\.ubuntu\.com|${APT_MIRROR}/ubuntu-ports|g; \
-            s|security\.ubuntu\.com|${APT_MIRROR}/ubuntu-ports|g" \
-        /etc/apt/sources.list
-fi
-
-# ---------------------------------------------------------------------------
-echo "=============== DNS ==============="
-# ---------------------------------------------------------------------------
-if [ ! -L /etc/resolv.conf ]; then
-    cat > /etc/resolv.conf <<'RESOLV'
-nameserver 223.5.5.5
-nameserver 119.29.29.29
-RESOLV
-fi
-
-echo 'Ubuntu 22.04 ARM64 base rootfs' > /etc/motd
-
-# ---------------------------------------------------------------------------
 echo "=============== 清理 ==============="
 # ---------------------------------------------------------------------------
 apt-get clean
 rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
+echo 'Ubuntu 22.04 ARM64 base rootfs' > /etc/motd
 echo "=============== 完成 ==============="
