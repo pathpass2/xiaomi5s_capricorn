@@ -21,12 +21,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # 彻底移除 tmate 以防挂起。需要调试时再手动加回。
+      # 彻底移除 tmate 以防挂起
 
       - name: 安装依赖
         run: |
           set -euxo pipefail
-          # 确保 apt 处于可用状态
           sudo apt-get update -y
           sudo apt-get install -y --no-install-recommends \
             qemu-user-static binfmt-support \
@@ -230,3 +229,10 @@ jobs:
           body: |
             **最新构建的固定下载入口**，内容随每次构建更新。
             资产名固定为 `rootfs.zip`，直链地址永不变：
+            https://github.com/${{ github.repository }}/releases/download/ARM64_Ubuntu_RootFS/rootfs.zip
+            | | |
+            |---|---|
+            | Ubuntu | ${{ env.DEBVER }} (${{ env.SUITE }}) |
+            | 构建时间 | ${{ env.BUILD_STAMP }} CST |
+            | 对应版本化 Release | `${{ env.RELEASE_TAG }}` |
+            需要固定某个历史版本请到 Releases 列表取带版本号的 tag。
