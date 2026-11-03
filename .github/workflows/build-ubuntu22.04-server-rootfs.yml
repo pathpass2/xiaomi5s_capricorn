@@ -7,37 +7,27 @@ env:
   MNT: /mnt/rootfs
   USERNAME: pathpass2
   APT_MIRROR: mirrors.ustc.edu.cn
-  # 镜像大小。首次启动会自动 resize2fs 扩到分区实际大小，这里只要够装完包
   IMG_SIZE: 2G
-  # 默认中文 locale。注意：内核 VT 字体表上限 512 字形，装不下 CJK，
-  # tty 下中文需 fbterm 之类的用户态终端；这里设为中文主要影响 SSH/图形/用户态程序。
   LOCALE: zh_CN.UTF-8
-  # 保留英文作为备选，用户可 update-locale 切换
   EXTRA_LOCALE: en_US.UTF-8
-  # 时区
   TIMEZONE: Asia/Shanghai
-  # Ubuntu 22.04 代号固定，不再动态解析
   SUITE: jammy
   DEBVER: "22.04"
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    # 锁定到 22.04，防止 ubuntu-latest 迁移到 26 导致依赖或源不兼容
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
 
-      # tmate 已移除，以免无超时导致卡死。
-      # 如需调试，请取消下方注释并务必设置超时：
-      # - name: Setup tmate session
-      #   uses: mxschmitt/action-tmate@v3
-      #   timeout-minutes: 15
-      #   with:
-      #       detached: true
+      # 彻底移除 tmate 以防挂起。需要调试时再手动加回。
 
       - name: 安装依赖
         run: |
           set -euxo pipefail
-          sudo apt-get update
+          # 确保 apt 处于可用状态
+          sudo apt-get update -y
           sudo apt-get install -y --no-install-recommends \
             qemu-user-static binfmt-support \
             qemu-utils android-sdk-libsparse-utils e2fsprogs zip \
