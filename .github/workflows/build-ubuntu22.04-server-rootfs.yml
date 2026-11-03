@@ -1,11 +1,12 @@
 name: Build ARM64 Ubuntu 22.04 RootFS
 
-permissions:
-  contents: write
   
 on:
   workflow_dispatch:
 
+permissions:
+  contents: write
+  
 env:
   MNT: /mnt/rootfs
   USERNAME: pathpass2
