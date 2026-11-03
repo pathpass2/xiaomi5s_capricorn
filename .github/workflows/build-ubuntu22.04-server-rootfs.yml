@@ -1,0 +1,238 @@
+name: Build ARM64 Ubuntu 22.04 RootFS
+
+on:
+  workflow_dispatch:
+
+env:
+  MNT: /mnt/rootfs
+  USERNAME: pathpass2
+  APT_MIRROR: mirrors.ustc.edu.cn
+  # 镜像大小。首次启动会自动 resize2fs 扩到分区实际大小，这里只要够装完包
+  IMG_SIZE: 2G
+  # 默认中文 locale。注意：内核 VT 字体表上限 512 字形，装不下 CJK，
+  # tty 下中文需 fbterm 之类的用户态终端；这里设为中文主要影响 SSH/图形/用户态程序。
+  LOCALE: zh_CN.UTF-8
+  # 保留英文作为备选，用户可 update-locale 切换
+  EXTRA_LOCALE: en_US.UTF-8
+  # 时区
+  TIMEZONE: Asia/Shanghai
+  # Ubuntu 22.04 代号固定，不再动态解析
+  SUITE: jammy
+  DEBVER: "22.04"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup tmate session
+        uses: mxschmitt/action-tmate@v3
+        with:
+            detached: true
+
+      - name: 安装依赖
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            qemu-user-static binfmt-support \
+            qemu-utils android-sdk-libsparse-utils e2fsprogs zip \
+            wget xz-utils
+
+      - name: 确认 aarch64 binfmt 可用
+        run: |
+          set -euxo pipefail
+          ls -l /proc/sys/fs/binfmt_misc/ || true
+          shopt -s nullglob
+          handlers=(/proc/sys/fs/binfmt_misc/*aarch64*)
+          if [ ${#handlers[@]} -eq 0 ]; then
+            echo "内核中没有 aarch64 handler，注册一次"
+            docker run --rm --privileged tonistiigi/binfmt --install arm64
+            handlers=(/proc/sys/fs/binfmt_misc/*aarch64*)
+          fi
+          if [ ${#handlers[@]} -eq 0 ]; then
+            echo "::error::注册后仍然没有 aarch64 binfmt handler"
+            exit 1
+          fi
+          printf '找到 handler: %s\n' "${handlers[@]}"
+          test -x /usr/bin/qemu-aarch64-static
+
+      - name: 构建并配置 rootfs
+        run: |
+          set -euxo pipefail
+
+          STAMP=$(TZ=Asia/Shanghai date +%Y%m%d-%H%M)
+          echo "::notice::Ubuntu ${DEBVER} (${SUITE})，构建于 ${STAMP} CST"
+
+          {
+            echo "BUILD_STAMP=${STAMP}"
+            echo "RELEASE_TAG=rootfs-ubuntu-${SUITE}-${STAMP}"
+            echo "ARTIFACT=rootfs-ubuntu-${SUITE}-${STAMP}.zip"
+          } >> "$GITHUB_ENV"
+
+          # 下载 Ubuntu Base arm64 tarball
+          BASE_URL="https://cdimage.ubuntu.com/ubuntu-base/releases/22.04/release/ubuntu-base-22.04-base-arm64.tar.gz"
+          wget -q "$BASE_URL" -O /tmp/ubuntu-base.tar.gz
+
+          qemu-img create -f raw root.img "$IMG_SIZE"
+          mkfs.ext4 -F -L ubuntu-rootfs root.img
+          sudo mkdir -p "$MNT"
+          sudo mount -o loop root.img "$MNT"
+
+          cleanup() {
+            local rc=$?
+            set +e
+            echo "=== 清理：卸载 $MNT ==="
+            sudo rm -f "$MNT/usr/bin/qemu-aarch64-static"
+            sudo umount -R "$MNT" 2>/dev/null
+            if mountpoint -q "$MNT"; then
+              sleep 2
+              sudo fuser -km "$MNT" 2>/dev/null
+              sudo umount -R "$MNT"
+            fi
+            sudo sync
+            return $rc
+          }
+          trap cleanup EXIT
+
+          echo "=== 解压 Ubuntu Base 到镜像 ==="
+          sudo tar -xzf /tmp/ubuntu-base.tar.gz -C "$MNT"
+
+          echo "=== 准备 chroot 环境 ==="
+          sudo cp /usr/bin/qemu-aarch64-static "$MNT/usr/bin/"
+          sudo cp /etc/resolv.conf "$MNT/etc/resolv.conf"
+
+          # 顺序有讲究：dev 必须在 dev/pts 之前
+          for d in proc sys dev dev/pts; do
+            sudo mount --bind "/$d" "$MNT/$d"
+          done
+
+          # 写入 Ubuntu 22.04 的中科大 ARM 源（ubuntu-ports）
+          sudo tee "$MNT/etc/apt/sources.list" > /dev/null <<EOF
+          deb https://${APT_MIRROR}/ubuntu-ports/ jammy main restricted universe multiverse
+          deb https://${APT_MIRROR}/ubuntu-ports/ jammy-updates main restricted universe multiverse
+          deb https://${APT_MIRROR}/ubuntu-ports/ jammy-backports main restricted universe multiverse
+          deb https://${APT_MIRROR}/ubuntu-ports/ jammy-security main restricted universe multiverse
+          EOF
+
+          echo "=== 铺覆盖层（最后拷，优先级最高）==="
+          sudo cp -a overlay/. "$MNT/"
+
+          echo "=== 断言 overlay 版本没被覆盖 ==="
+          if ! sudo grep -q 'hkdm 触发' "$MNT/usr/bin/power.sh"; then
+            echo "::error::/usr/bin/power.sh 不是 overlay 里的重写版，检查拷贝顺序"
+            exit 1
+          fi
+
+          echo "=== chroot 内配置 ==="
+          sudo cp scripts/configure-rootfs.sh "$MNT/tmp/"
+          sudo chroot "$MNT" env \
+            USERNAME="$USERNAME" \
+            LOCALE="$LOCALE" \
+            EXTRA_LOCALE="$EXTRA_LOCALE" \
+            TIMEZONE="$TIMEZONE" \
+            APT_MIRROR="$APT_MIRROR" \
+            USER_PASSWORD="${{ secrets.ROOTFS_PASSWORD || '1234' }}" \
+            /bin/bash /tmp/configure-rootfs.sh
+          sudo rm -f "$MNT/tmp/configure-rootfs.sh"
+
+          echo "=== 产物完整性断言 ==="
+          for f in /usr/bin/power.sh /usr/bin/hkdm /usr/bin/buffyboard \
+                   /usr/local/sbin/grow-rootfs \
+                   /etc/hkdm/config.d/power.toml \
+                   /etc/systemd/system/hkdm.service \
+                   /etc/systemd/system/buffyboard.service \
+                   /etc/systemd/system/grow-rootfs.service \
+                   /etc/systemd/system/serial-getty@ttyGS0.service.d/autologin.conf \
+                   /etc/systemd/system/getty@tty1.service.d/override.conf \
+                   /etc/systemd/logind.conf.d/10-powerkey.conf \
+                   /etc/modules-load.d/uinput.conf; do
+            if [ ! -e "$MNT$f" ]; then
+              echo "::error::$f 不在镜像里"
+              exit 1
+            fi
+          done
+
+          echo "=== 动态库检查 ==="
+          rc=0
+          for b in hkdm buffyboard; do
+            echo "--- $b ---"
+            sudo chroot "$MNT" ldd "/usr/bin/$b" 2>&1 | tee "/tmp/ldd-$b.txt" || true
+            if grep -q 'not found' "/tmp/ldd-$b.txt"; then
+              echo "::error::$b 有未满足的动态库依赖（见上）"
+              rc=1
+            fi
+          done
+          [ "$rc" -eq 0 ]
+
+          echo "=== 已启用的关键服务 ==="
+          sudo chroot "$MNT" systemctl is-enabled \
+            ssh NetworkManager systemd-timesyncd hkdm grow-rootfs \
+            getty@tty1.service serial-getty@ttyGS0.service || true
+
+          echo "=== 占用情况 ==="
+          df -h "$MNT"
+
+      - name: 转 sparse 镜像
+        run: |
+          set -euxo pipefail
+          if mountpoint -q "$MNT"; then
+            echo "::error::镜像仍处于挂载状态，拒绝打包"
+            exit 1
+          fi
+          set +e
+          e2fsck -f -y root.img
+          fsck_rc=$?
+          set -e
+          echo "e2fsck 返回 $fsck_rc"
+          if [ "$fsck_rc" -ge 4 ]; then
+            echo "::error::文件系统存在未修复的错误，拒绝打包"
+            exit 1
+          fi
+
+          img2simg root.img rootfs.img
+          zip -9 "$ARTIFACT" rootfs.img
+          zip -9 rootfs.zip rootfs.img
+          ls -lh root.img rootfs.img "$ARTIFACT" rootfs.zip
+
+      - name: 发布版本化 Release
+        uses: ncipollo/release-action@v1
+        with:
+          tag: ${{ env.RELEASE_TAG }}
+          name: Ubuntu ${{ env.DEBVER }} (${{ env.SUITE }}) — ${{ env.BUILD_STAMP }}
+          artifacts: ${{ env.ARTIFACT }}
+          allowUpdates: true
+          makeLatest: false
+          commit: ${{ github.sha }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          body: |
+            ARM64 Ubuntu 底包（rootfs）。固件与内核模块需用本地脚本注入。
+
+            | | |
+            |---|---|
+            | Ubuntu | ${{ env.DEBVER }} (${{ env.SUITE }}) |
+            | 构建时间 | ${{ env.BUILD_STAMP }} CST |
+            | 时区 | ${{ env.TIMEZONE }} |
+            | Locale | ${{ env.LOCALE }}（另附 ${{ env.EXTRA_LOCALE }} 可切换） |
+            | 提交 | ${{ github.sha }} |
+
+            - 用户名 `${{ env.USERNAME }}`，密码 `1234`，属于 sudo 组
+            - tty1 与 USB 串口均自动登录
+            - 默认中文（zh_CN.UTF-8），24 小时制
+            - 首次启动自动扩容根文件系统，无需手动 resize2fs
+            - 音量下键切换 buffyboard 虚拟键盘，电源键短按切屏幕亮度、长按关机
+
+      - name: 更新 latest 固定入口
+        uses: ncipollo/release-action@v1
+        with:
+          tag: ARM64_Ubuntu_RootFS
+          name: Latest — Ubuntu ${{ env.DEBVER }} (${{ env.SUITE }})
+          artifacts: rootfs.zip
+          allowUpdates: true
+          removeArtifacts: true
+          makeLatest: true
+          commit: ${{ github.sha }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          body: |
+            **最新构建的固定下载入口**，内容随每次构建更新。
+            资产名固定为 `rootfs.zip`，直链地址永不变：
