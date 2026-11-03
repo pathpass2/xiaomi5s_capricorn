@@ -21,8 +21,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # 彻底移除 tmate 以防挂起
-
       - name: 安装依赖
         run: |
           set -euxo pipefail
@@ -101,11 +99,13 @@ jobs:
           done
 
           # 写入 Ubuntu 22.04 的中科大 ARM 源（ubuntu-ports）
+          # 绝对不能用带缩进的 heredoc，否则 apt 会因为行首空格忽略这些源
+          # 这里使用 cat 和 EOF，确保顶格写入
           sudo tee "$MNT/etc/apt/sources.list" > /dev/null <<EOF
-          deb https://${APT_MIRROR}/ubuntu-ports/ jammy main restricted universe multiverse
-          deb https://${APT_MIRROR}/ubuntu-ports/ jammy-updates main restricted universe multiverse
-          deb https://${APT_MIRROR}/ubuntu-ports/ jammy-backports main restricted universe multiverse
-          deb https://${APT_MIRROR}/ubuntu-ports/ jammy-security main restricted universe multiverse
+          deb http://${APT_MIRROR}/ubuntu-ports/ jammy main restricted universe multiverse
+          deb http://${APT_MIRROR}/ubuntu-ports/ jammy-updates main restricted universe multiverse
+          deb http://${APT_MIRROR}/ubuntu-ports/ jammy-backports main restricted universe multiverse
+          deb http://${APT_MIRROR}/ubuntu-ports/ jammy-security main restricted universe multiverse
           EOF
 
           echo "=== 铺覆盖层（最后拷，优先级最高）==="
