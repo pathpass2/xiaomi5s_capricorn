@@ -42,15 +42,13 @@ on:
       rootfs_url:
         description: "root.zip URL"
         required: true
-        default: "https://github.com/kschen202115/Port_Debian_for_capricorn/releases/download/ARM64_Debian_RootFS/rootfs.zip"
-        # default: "https://github.com/kschen202115/Port_Debian_for_capricorn/releases/download/Linux_Kernel_debian/root.zip"
+        default: "https://github.com/pathpass2/xiaomi5s_capricorn/releases/download/ARM64_Ubuntu_RootFS/rootfs.zip"
 env:
   TZ: Asia/Shanghai
 
 jobs:
   build:
     runs-on: ubuntu-22.04
-
 
     steps:
       - name: Checkout
@@ -141,17 +139,14 @@ jobs:
           export CROSS_COMPILE=aarch64-linux-gnu-
           export CLANG_TRIPLE=aarch64-linux-gnu-
           export ARCH=arm64
-          #export DEB_BUILD_OPTIONS="-d"
           export KDEB_OPTIONS="-d"
-          #跳过依赖检验，对于6.12内核源码
-
 
           if [ "${{ inputs.use_clang }}" == "true" ]; then
             make ${{ inputs.device_code }}_defconfig ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CLANG_TRIPLE=aarch64-linux-gnu- CC=clang-19 LD=ld.lld-19 AR=llvm-ar AS=llvm-as NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump READELF=llvm-readelf STRIP=llvm-strip LLVM=1 LLVM_IAS=1
             make bindeb-pkg KDEB_OPTIONS="-d" ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CLANG_TRIPLE=aarch64-linux-gnu- CC=clang-19 LD=ld.lld-19 AR=llvm-ar AS=llvm-as NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump READELF=llvm-readelf STRIP=llvm-strip LLVM=1 LLVM_IAS=1 KCFLAGS="-mcpu=kryo" -j$(nproc)
           fi
           if [ "${{ inputs.use_clang }}" == "false" ]; then
-            make ${{ inputs.device_code }}_defconfig 
+            make ${{ inputs.device_code }}_defconfig
             make bindeb-pkg KDEB_OPTIONS="-d" -j$(nproc)
           fi
           cd ..
@@ -171,40 +166,49 @@ jobs:
         run: |
           cd /rootfs
           ###########################################################
-          #如果需要使用自定义rootfs，请替换下面链接，并修改对应代码
-          #rootfs链接
+          # 使用 Ubuntu 22.04 rootfs
           wget -O root.zip "${{ inputs.rootfs_url }}"
-          #解压并清除
+          # 解压并清除
           unzip root.zip
           sudo rm -rf root.zip
-          #转化格式并清除
+          # 转化格式并清除
           simg2img ./rootfs.img ./root.img
           sudo rm -rf rootfs.img
-          
+
           sudo mount root.img /mnt/chroot
           sudo mount --bind /proc /mnt/chroot/proc
           sudo mount --bind /dev /mnt/chroot/dev
           sudo mount --bind /dev/pts /mnt/chroot/dev/pts
           sudo mount --bind /sys /mnt/chroot/sys
-          sudo rm -rf  /mnt/chroot/tmp/linux-*.deb 
+          # Ubuntu Base 的 /etc/resolv.conf 可能为空，拷贝一份确保 apt 可用
+          sudo cp /etc/resolv.conf /mnt/chroot/etc/resolv.conf || true
+          sudo rm -rf /mnt/chroot/tmp/linux-*.deb
           cp linux-* /mnt/chroot/tmp
           if [ "${{ inputs.add_firmware }}" == "true" ]; then
-            #######################################
-            #请自己添加firmware到仓库里，并取消注释
             sudo cp -rf --no-dereference ./firmware/* /mnt/chroot/lib/firmware/ || true
-            # cp -f --no-dereference source_file destination || true
-            #######################################
           fi
       - name: Install Kernel in chroot
         run: |
           sudo chroot /mnt/chroot /bin/bash -c "
             cd /tmp
-            dpkg --get-selections | grep linux
-            dpkg -l | grep -E 'linux-headers|linux-image' | awk '{print \$2}' | xargs dpkg -P
+            dpkg --get-selections | grep linux || true
+
+            # Ubuntu Base 可能没有预装内核，需容忍空输入
+            pkgs=\$(dpkg -l | grep -E 'linux-headers|linux-image' | awk '{print \$2}' || true)
+            if [ -n \"\$pkgs\" ]; then dpkg -P \$pkgs; fi
+
+            # 安装 linux-base 等依赖，避免 dpkg -i 失败
+            apt-get update || true
+            apt-get install -y --no-install-recommends linux-base || true
+
             rm -rf /lib/modules/*
             dpkg -i linux*.deb
-            dpkg --get-selections | grep linux
+            dpkg --get-selections | grep linux || true
             ls /lib/modules
+
+            # 确保 initrd 生成
+            update-initramfs -u -k all || echo 'initramfs 更新失败，继续'
+            ls -l /boot/initrd.img-* || { echo '没有生成 initrd'; exit 1; }
           "
       - name: Build boot image
         run: |
@@ -218,31 +222,21 @@ jobs:
           abootimg -x boot.img
           # 修改 cmdline 参数
           sed -i "s|^cmdline = .*|cmdline = console=tty0 root=UUID=$UUID rw loglevel=3 splash cpuidle.governor=teo|" bootimg.cfg
-          # 显示修改后的 bootimg.cfg
           echo "Updated bootimg.cfg:"
           cat bootimg.cfg
-          # 指定输出位置重新打包 boot.img
           OUTPUT_PATH="/workdir/boot.img"
           cp ./tmp_mkboot/initrd.img initrd.img
           cp ./tmp_mkboot/kernel-dtb zImage
-          
-          # 自动计算新的 bootsize
-          KERNEL_SIZE=$(stat -c %s zImage)        # 获取内核大小
-          RAMDISK_SIZE=$(stat -c %s initrd.img)  # 获取 ramdisk 大小
-          PAGESIZE=4096                          # 页大小（默认）
-          ALIGN=$((PAGESIZE - 1))                # 对齐值
-          
-          # 计算实际大小（对齐页边界）
-          CALC_SIZE=$((KERNEL_SIZE + RAMDISK_SIZE + 2 * PAGESIZE))
-          BOOTSIZE=$(((CALC_SIZE + ALIGN) & ~ALIGN)) # 对齐到页边界
-          
-          # 给 Boot Image 加 1MB 额外空间（1048576 字节）
-          BOOTSIZE_WITH_EXTRA=$((BOOTSIZE + 1048576))
-          
-          # 更新 bootsize 参数
-          sed -i "s|^bootsize = .*|bootsize = 0x$(printf '%x' $BOOTSIZE_WITH_EXTRA)|" bootimg.cfg
 
-          # 显示修改后的 bootimg.cfg
+          # 自动计算新的 bootsize
+          KERNEL_SIZE=$(stat -c %s zImage)
+          RAMDISK_SIZE=$(stat -c %s initrd.img)
+          PAGESIZE=4096
+          ALIGN=$((PAGESIZE - 1))
+          CALC_SIZE=$((KERNEL_SIZE + RAMDISK_SIZE + 2 * PAGESIZE))
+          BOOTSIZE=$(((CALC_SIZE + ALIGN) & ~ALIGN))
+          BOOTSIZE_WITH_EXTRA=$((BOOTSIZE + 1048576))
+          sed -i "s|^bootsize = .*|bootsize = 0x$(printf '%x' $BOOTSIZE_WITH_EXTRA)|" bootimg.cfg
           echo "Updated bootimg.cfg:"
           cat bootimg.cfg
 
@@ -250,12 +244,11 @@ jobs:
           img2simg ./root.img ./rootfs.img
           zip root.zip rootfs.img
           cp root.zip /workdir/
-          # cp ./tmp_mkboot/boot.img /workdir/
       - name: Set release tag
         id: release_tag
         if: steps.compile.outputs.status == 'success' && !cancelled()
         run: |
-          echo "tag=debian_for_${{ inputs.device_code }}_$(date +'%Y%m%d-%H%M%S')" >> "$GITHUB_OUTPUT"
+          echo "tag=ubuntu22.04_for_${{ inputs.device_code }}_$(date +'%Y%m%d-%H%M%S')" >> "$GITHUB_OUTPUT"
       - name: Upload image to Release
         uses: ncipollo/release-action@main
         if: steps.compile.outputs.status == 'success' && !cancelled()
@@ -268,4 +261,4 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           body: |
             This is boot.img and rootfs.img(in the root.zip) for ${{ inputs.device_code }}
-            Base rootfs url ${{ inputs.rootfs_url }}
+            Base rootfs: Ubuntu 22.04 (jammy) — ${{ inputs.rootfs_url }}
