@@ -1,4 +1,4 @@
-# 一键：先跑 build-rootfs，成功后再跑 mi5s。
+# 一键：先跑 build-ubuntu22.04-server-rootfs，成功后再跑 mi5s。
 #
 # 不改动这两个 workflow 的任何内容 —— 通过 API 触发它们的 workflow_dispatch
 # 再轮询等待结果。用内置的 GITHUB_TOKEN 即可，不需要 PAT：
@@ -6,7 +6,7 @@
 # 不会创建新 workflow run」这条规则的例外。
 #
 # 唯一的前提是 GITHUB_TOKEN 需要 actions: write（下面已声明）。
-name: 一键构建
+name: 一键构建 Ubuntu + mi5s
 
 on:
   workflow_dispatch:
@@ -55,8 +55,8 @@ permissions:
 jobs:
   chain:
     runs-on: ubuntu-latest
-    # rootfs 的 debootstrap 加上内核编译，给足余量
-    timeout-minutes: 180
+    # rootfs 构建加上内核编译，给足余量（视网络情况可能需要 2 小时以上）
+    timeout-minutes: 240
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       GH_REPO: ${{ github.repository }}
@@ -141,14 +141,14 @@ jobs:
           SH
           chmod +x "$RUNNER_TEMP/run_and_wait.sh"
 
-      - name: 1/2 构建 rootfs
+      - name: 1/2 构建 Ubuntu 22.04 rootfs
         if: inputs.skip_rootfs != 'true'
-        run: "$RUNNER_TEMP/run_and_wait.sh build-rootfs.yml"
+        run: "$RUNNER_TEMP/run_and_wait.sh build-ubuntu22.04-server-rootfs.yml"
 
       - name: 跳过 rootfs 的说明
         if: inputs.skip_rootfs == 'true'
         run: |
-          echo "::notice::已跳过 rootfs 构建，mi5s 将使用固定入口上的现有底包"
+          echo "::notice::已跳过 rootfs 构建，mi5s 将使用固定入口上的现有 Ubuntu 底包"
           echo "- 跳过 rootfs 构建" >> "$GITHUB_STEP_SUMMARY"
 
       - name: 2/2 编译内核并打包 boot.img
@@ -160,7 +160,7 @@ jobs:
             -f apply_cjktty_patch='${{ inputs.apply_cjktty_patch }}' \
             -f add_firmware='${{ inputs.add_firmware }}' \
             -f use_clang='${{ inputs.use_clang }}' \
-            -f rootfs_url="https://github.com/$GH_REPO/releases/download/ARM64_Debian_RootFS/rootfs.zip"
+            -f rootfs_url="https://github.com/$GH_REPO/releases/download/ARM64_Ubuntu_RootFS/rootfs.zip"
 
       # 兜底：trap 只在「正在等待」的那一步生效。若取消发生在步骤间隙，
       # 或 trap 没来得及执行，这里再扫一遍所有登记过的子 run。
