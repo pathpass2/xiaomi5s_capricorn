@@ -1,11 +1,4 @@
 # 一键：先跑 build-ubuntu22.04-server-rootfs，成功后再跑 mi5s。
-#
-# 不改动这两个 workflow 的任何内容 —— 通过 API 触发它们的 workflow_dispatch
-# 再轮询等待结果。用内置的 GITHUB_TOKEN 即可，不需要 PAT：
-# 文档明确 workflow_dispatch / repository_dispatch 是「GITHUB_TOKEN 触发的事件
-# 不会创建新 workflow run」这条规则的例外。
-#
-# 唯一的前提是 GITHUB_TOKEN 需要 actions: write（下面已声明）。
 name: 一键构建 Ubuntu + mi5s
 
 on:
@@ -55,7 +48,6 @@ permissions:
 jobs:
   chain:
     runs-on: ubuntu-latest
-    # rootfs 构建加上内核编译，给足余量（视网络情况可能需要 2 小时以上）
     timeout-minutes: 240
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -66,23 +58,15 @@ jobs:
       - name: 准备等待函数
         run: |
           set -euo pipefail
-          # 写成脚本文件，后面两步共用；避免在 YAML 里重复一大段 shell
           cat > "$RUNNER_TEMP/run_and_wait.sh" <<'SH'
           #!/usr/bin/env bash
-          # run_and_wait <workflow 文件名> [gh workflow run 的额外参数...]
-          #
-          # 静默等待：不用 gh run watch —— 它是给 TTY 设计的，在 Actions 日志里
-          # 会把整屏刷新展开成成百上千行。这里改成轮询，只在状态变化时打一行。
           set -euo pipefail
           wf="$1"; shift
 
-          # 记录触发前的时间戳，用它筛出「本次」产生的 run。
-          # 不能只取最新一条 —— 并发触发时会认错。
           before=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           t0=$(date +%s)
           gh workflow run "$wf" --ref "$REF" "$@"
 
-          # dispatch 是异步的，run 不会立刻出现，轮询最多 2 分钟
           id=""
           for _ in $(seq 1 24); do
             sleep 5
@@ -95,8 +79,6 @@ jobs:
 
           if [ -z "$id" ]; then
             echo "::error::触发 $wf 后 2 分钟内没有出现新的 run"
-            echo "常见原因：仓库设置里 Workflow permissions 是只读，"
-            echo "或该 workflow 在当前分支上不存在 workflow_dispatch 触发器。"
             exit 1
           fi
 
@@ -104,11 +86,8 @@ jobs:
           echo "$wf  run $id"
           echo "$url"
 
-          # 登记下来，供最后的兜底清理步骤使用
           echo "$id" >> "$RUNNER_TEMP/child_runs"
 
-          # 取消编排 job 时，本步骤会先收到 SIGINT 再 SIGTERM。
-          # 子 run 是独立的 workflow run，不会被连带取消，必须显式 cancel。
           on_signal() {
             echo "::warning::收到中断信号，取消子任务 $id"
             gh run cancel "$id" >/dev/null 2>&1 || true
@@ -116,7 +95,6 @@ jobs:
           }
           trap on_signal INT TERM
 
-          # 每 30 秒查一次，只在状态变化时输出
           last=""
           while :; do
             read -r status conclusion < <(
@@ -162,8 +140,6 @@ jobs:
             -f use_clang='${{ inputs.use_clang }}' \
             -f rootfs_url="https://github.com/$GH_REPO/releases/download/ARM64_Ubuntu_RootFS/rootfs.zip"
 
-      # 兜底：trap 只在「正在等待」的那一步生效。若取消发生在步骤间隙，
-      # 或 trap 没来得及执行，这里再扫一遍所有登记过的子 run。
       - name: 取消未结束的子任务
         if: cancelled() || failure()
         run: |
