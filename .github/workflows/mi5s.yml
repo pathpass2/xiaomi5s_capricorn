@@ -20,25 +20,19 @@ on:
         required: true
         default: "true"
         type: choice
-        options:
-          - "true"
-          - "false"
+        options: ["true", "false"]
       add_firmware:
         description: "Add firmware to the build"
         required: true
         default: "true"
         type: choice
-        options:
-          - "true"
-          - "false"
+        options: ["true", "false"]
       use_clang:
         description: "Use Clang as the compiler"
         required: true
         default: "true"
         type: choice
-        options:
-          - "true"
-          - "false"
+        options: ["true", "false"]
       rootfs_url:
         description: "root.zip URL"
         required: true
@@ -52,7 +46,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
       - name: Initialization environment
         env:
           DEBIAN_FRONTEND: noninteractive
@@ -70,7 +64,8 @@ jobs:
           # 添加 ARM64 架构支持
           sudo dpkg --add-architecture arm64
           sudo -E apt-get -qq update || true
-          sudo -E apt-get -qq install -y binfmt-support qemu-user-static abootimg fakeroot simg2img img2simg mkbootimg bison flex gcc-aarch64-linux-gnu pkg-config libdw-dev:native libelf-dev libncurses-dev libssl-dev:native libssl-dev:arm64 pahole rsync xz-utils zstd unzip git bc devscripts debhelper openssl
+          # 加入 android-sdk-libsparse-utils 以提供 simg2img/img2simg
+          sudo -E apt-get -qq install -y binfmt-support qemu-user-static abootimg fakeroot simg2img img2simg mkbootimg android-sdk-libsparse-utils bison flex gcc-aarch64-linux-gnu pkg-config libdw-dev:native libelf-dev libncurses-dev libssl-dev:native libssl-dev:arm64 pahole rsync xz-utils zstd unzip git bc devscripts debhelper openssl
           sudo -E apt-get -qq autoremove --purge
           sudo -E apt-get -qq clean
           sudo timedatectl set-timezone "$TZ"
@@ -82,9 +77,9 @@ jobs:
           sudo chown $USER:$GROUPS /rootfs
           sudo chown $USER:$GROUPS /rootfs/tmp_mkboot
           sudo chown $USER:$GROUPS /mnt/chroot
-          cp *.sh /rootfs/
-          cp boot.img /rootfs/
-          cp -rf ./firmware /rootfs/
+          cp *.sh /rootfs/ || true
+          cp boot.img /rootfs/ || true
+          cp -rf ./firmware /rootfs/ || true
       - name: Download source code
         id: down
         run: |
@@ -106,7 +101,6 @@ jobs:
           make clean
           make mrproper
 
-          # Adds the alternative TD4722 panel DTB and DRM panel driver.
           git apply 0002-capricorn-td4722-panel-support.patch
           git apply 0003-arm64-dts-qcom-capricorn-set-sound-card-model.patch
           git apply 0004-media-venus-hfi_cmds-pack-H264_TRANSFORM_8X8-in-1x.patch
@@ -118,13 +112,10 @@ jobs:
           git apply 0012-ASoC-qcom-apq8096-add-MI2S-clock-and-format-setup.patch
           git apply 0013-arm64-dts-qcom-capricorn-add-tfa9891-speaker.patch
 
-          # CONFIG_ARCH_QCOM normally builds every Qualcomm DTB. This image
-          # targets the TD4722 Capricorn variant only.
           awk '!/^dtb-\$\(CONFIG_ARCH_QCOM\).*+=/ || /msm8996pro-xiaomi-capricorn-td4722\.dtb/' \
               arch/arm64/boot/dts/qcom/Makefile > arch/arm64/boot/dts/qcom/Makefile.capricorn
           mv arch/arm64/boot/dts/qcom/Makefile.capricorn arch/arm64/boot/dts/qcom/Makefile
 
-          # CJKTTY 6.19 patches are bundled in this repository's patch/ directory.
           if [ "${{ inputs.apply_cjktty_patch }}" == "true" ]; then
             git apply cjktty-6.19.patch
             git apply cjktty-add-cjk32x32-font-data.patch
@@ -165,13 +156,9 @@ jobs:
       - name: Prepare Environment
         run: |
           cd /rootfs
-          ###########################################################
-          # 使用 Ubuntu 22.04 rootfs
           wget -O root.zip "${{ inputs.rootfs_url }}"
-          # 解压并清除
           unzip root.zip
           sudo rm -rf root.zip
-          # 转化格式并清除
           simg2img ./rootfs.img ./root.img
           sudo rm -rf rootfs.img
 
@@ -180,7 +167,6 @@ jobs:
           sudo mount --bind /dev /mnt/chroot/dev
           sudo mount --bind /dev/pts /mnt/chroot/dev/pts
           sudo mount --bind /sys /mnt/chroot/sys
-          # Ubuntu Base 的 /etc/resolv.conf 可能为空，拷贝一份确保 apt 可用
           sudo cp /etc/resolv.conf /mnt/chroot/etc/resolv.conf || true
           sudo rm -rf /mnt/chroot/tmp/linux-*.deb
           cp linux-* /mnt/chroot/tmp
@@ -193,11 +179,9 @@ jobs:
             cd /tmp
             dpkg --get-selections | grep linux || true
 
-            # Ubuntu Base 可能没有预装内核，需容忍空输入
             pkgs=\$(dpkg -l | grep -E 'linux-headers|linux-image' | awk '{print \$2}' || true)
             if [ -n \"\$pkgs\" ]; then dpkg -P \$pkgs; fi
 
-            # 安装 linux-base 等依赖，避免 dpkg -i 失败
             apt-get update || true
             apt-get install -y --no-install-recommends linux-base || true
 
@@ -206,7 +190,6 @@ jobs:
             dpkg --get-selections | grep linux || true
             ls /lib/modules
 
-            # 确保 initrd 生成
             update-initramfs -u -k all || echo 'initramfs 更新失败，继续'
             ls -l /boot/initrd.img-* || { echo '没有生成 initrd'; exit 1; }
           "
@@ -218,9 +201,7 @@ jobs:
           cp ./tmp_mkboot/initrd* ./tmp_mkboot/initrd.img
           cat ./tmp_mkboot/Image.gz ./tmp_mkboot/msm8996pro-xiaomi-capricorn-td4722.dtb > ./tmp_mkboot/kernel-dtb
           UUID=$(blkid ./root.img | sed -n 's/.*UUID="\([^"]*\)".*/\1/p')
-          # 解包 boot.img
           abootimg -x boot.img
-          # 修改 cmdline 参数
           sed -i "s|^cmdline = .*|cmdline = console=tty0 root=UUID=$UUID rw loglevel=3 splash cpuidle.governor=teo|" bootimg.cfg
           echo "Updated bootimg.cfg:"
           cat bootimg.cfg
@@ -228,7 +209,6 @@ jobs:
           cp ./tmp_mkboot/initrd.img initrd.img
           cp ./tmp_mkboot/kernel-dtb zImage
 
-          # 自动计算新的 bootsize
           KERNEL_SIZE=$(stat -c %s zImage)
           RAMDISK_SIZE=$(stat -c %s initrd.img)
           PAGESIZE=4096
