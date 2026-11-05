@@ -217,13 +217,25 @@ jobs:
         run: |
           sudo chroot /mnt/chroot /bin/bash -c "
             cd /tmp
+            # 卸载旧内核包
             pkgs=\$(dpkg -l | grep -E 'linux-headers|linux-image' | awk '{print \$2}' || true)
             if [ -n \"\$pkgs\" ]; then dpkg -P \$pkgs; fi
+            
+            # 删除旧模块
+            rm -rf /lib/modules/*
+            
+            # 更新 apt 源并安装必要的依赖
             apt-get update || true
             apt-get install -y --no-install-recommends linux-base || true
-            rm -rf /lib/modules/*
-            dpkg -i linux*.deb
+            
+            # 安装新内核，同时安装 headers 和 libc-dev
+            dpkg -i linux-image-*.deb linux-headers-*.deb linux-libc-dev-*.deb || true
+            
+            # 更新 initrd
             update-initramfs -u -k all || true
+            
+            echo '--- 检查 /usr/src 目录，确认 headers 是否安装成功 ---'
+            ls -l /usr/src/
           "
 
       - name: Build boot image
