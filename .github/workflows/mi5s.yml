@@ -173,18 +173,21 @@ jobs:
           cp -a linux/include /workdir/linux-headers-$KVER/
           cp -a linux/.config /workdir/linux-headers-$KVER/
           
-          # 进入 workdir 打包头文件
+          # 进入 workdir 打包头文件，并删除临时文件夹
           cd /workdir
           tar -zcf linux-headers-kernel_version-$KVER.tar.gz linux-headers-$KVER
-          # 删除临时文件夹以免影响后续上传
           rm -rf linux-headers-$KVER
+          
           # ==========================================
+          # 打包完毕后，显式切回 GitHub Workspace，确保后续路径正确
+          # ==========================================
+          cd $GITHUB_WORKSPACE
           
           cp linux/arch/arm64/boot/Image.gz /workdir
           cp linux/arch/arm64/boot/Image.gz /rootfs/tmp_mkboot/
           cp linux/arch/arm64/boot/dts/qcom/msm8996pro-xiaomi-capricorn-td4722.dtb /rootfs/tmp_mkboot/
           tar -czf /workdir/dtb.tar.gz linux/arch/arm64/boot/dts/qcom/msm8996pro-xiaomi-capricorn-td4722.dtb
-          find ./ -type f \( ! -name "*.ko" -a ! -name "modules.*" \) -exec rm -f {} \;
+          find linux/ -type f \( ! -name "*.ko" -a ! -name "modules.*" \) -exec rm -f {} \; 
           cd linux/
           tar -czf /workdir/modules.tar.gz ./*
           cd ..
