@@ -158,7 +158,7 @@ jobs:
           echo "Kernel version: $KVER"
           
           # ==========================================
-          # 参考 RK3566 的打包方式，制作真实的 linux-headers 文件夹
+          # 制作真实的 linux-headers 文件夹并打包
           # ==========================================
           mkdir -p /workdir/linux-headers-$KVER
           cp -a linux/Module.symvers /workdir/linux-headers-$KVER/
@@ -224,17 +224,27 @@ jobs:
             # 删除旧模块
             rm -rf /lib/modules/*
             
-            # 更新 apt 源并安装必要的依赖
+            # 更新源并安装基础依赖
             apt-get update || true
-            apt-get install -y --no-install-recommends linux-base || true
+            apt-get install -y --no-install-recommends linux-base initramfs-tools || true
             
-            # 安装新内核，同时安装 headers 和 libc-dev
-            dpkg -i linux-image-*.deb linux-headers-*.deb linux-libc-dev-*.deb || true
+            # 1. 先单独装 libc-dev 和 image
+            dpkg -i linux-libc-dev-*.deb || true
+            dpkg -i linux-image-*.deb || true
+            dpkg --configure -a || true
             
-            # 更新 initrd
-            update-initramfs -u -k all || true
+            # 2. 再安装 headers
+            dpkg -i linux-headers-*.deb || true
+            dpkg --configure -a || true
             
-            echo '--- 检查 /usr/src 目录，确认 headers 是否安装成功 ---'
+            # 3. 如果自动生成 initrd 失败，强制手动生成一次
+            if [ ! -f /boot/initrd.img-* ]; then
+              echo '自动生成 initrd 失败，手动生成...'
+              update-initramfs -c -k all || true
+            fi
+            
+            echo '--- 检查 initrd 和 headers ---'
+            ls -l /boot/initrd.img-* || true
             ls -l /usr/src/
           "
 
