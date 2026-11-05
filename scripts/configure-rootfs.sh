@@ -35,6 +35,20 @@ nameserver 119.29.29.29
 EOF
 
 # ---------------------------------------------------------------------------
+# 禁用 snap 和 cloud-init 网络管理
+# ---------------------------------------------------------------------------
+echo "=============== 屏蔽 Snap 和 Netplan ==============="
+# 阻止 apt 安装 snapd 以及将其作为依赖
+cat > /etc/apt/preferences.d/nosnap.pref <<'SNAPCONF'
+Package: snapd
+Pin: release a=*
+Pin-Priority: -10
+SNAPCONF
+
+# 标记 Netplan 和 Cloud-init 为 hold，防止其接管网络
+apt-mark hold netplan.io cloud-init 2>/dev/null || true
+
+# ---------------------------------------------------------------------------
 # 小工具
 # ---------------------------------------------------------------------------
 require_file() {
@@ -75,7 +89,22 @@ apt-get install -y --no-install-recommends \
     initramfs-tools busybox \
     ncurses-term \
     libinih1 \
-    language-pack-zh-hans
+    language-pack-zh-hans \
+    apt-transport-https software-properties-common
+
+# ---------------------------------------------------------------------------
+echo "=============== 安装 Docker ==============="
+# ---------------------------------------------------------------------------
+# 卸载可能存在的旧版本
+apt-get remove -y docker docker-engine docker-ce docker.io containerd runc || true
+
+# 添加阿里云 Docker 源和 GPG 密钥
+curl -fsSL http://mirrors.aliyun.com/docker-ce/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/trusted.gpg.d/docker.gpg
+echo "deb [arch=arm64] https://mirrors.aliyun.com/docker-ce/linux/ubuntu jammy stable" > /etc/apt/sources.list.d/docker.list
+
+# 更新源并安装 Docker
+apt-get update
+apt-get install -y --no-install-recommends docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 
 # ---------------------------------------------------------------------------
 echo "=============== locale ==============="
@@ -156,6 +185,40 @@ ln -sf "/usr/share/zoneinfo/${TIMEZONE}" /etc/localtime
 echo "${TIMEZONE}" > /etc/timezone
 
 # ---------------------------------------------------------------------------
+echo "=============== 网络与 USB 网卡配置 ==============="
+# ---------------------------------------------------------------------------
+# 1. 强制 NetworkManager 管理所有设备，防止 USB 网卡被识别为 unmanaged
+mkdir -p /etc/NetworkManager/conf.d/
+cat > /etc/NetworkManager/conf.d/10-globally-managed-devices.conf <<'NMCONF'
+[keyfile]
+unmanaged-devices=none
+NMCONF
+
+# 2. 为所有有线以太网卡（eth* 或 enx* 即 USB 网卡）开启 DHCP 自动连接
+mkdir -p /etc/NetworkManager/system-connections/
+cat > /etc/NetworkManager/system-connections/default-wired.nmconnection <<'NMCONN'
+[connection]
+id=default-wired
+uuid=7a9b1e2c-3d4f-5a6b-7c8d-9e0f1a2b3c4d
+type=ethernet
+autoconnect=true
+autoconnect-priority=10
+
+[ethernet]
+mac-address-blacklist=
+
+[ipv4]
+method=auto
+
+[ipv6]
+addr-gen-mode=stable-privacy
+method=auto
+NMCONN
+
+# 3. 确保该配置文件的权限正确（NetworkManager 要求 600）
+chmod 600 /etc/NetworkManager/system-connections/default-wired.nmconnection
+
+# ---------------------------------------------------------------------------
 echo "=============== 脚本权限 ==============="
 # ---------------------------------------------------------------------------
 for f in /usr/bin/power.sh /usr/bin/hkdm /usr/bin/buffyboard /usr/local/sbin/grow-rootfs; do
@@ -175,6 +238,7 @@ systemctl enable NetworkManager
 systemctl enable systemd-timesyncd
 systemctl enable getty@tty1.service
 systemctl enable serial-getty@ttyGS0.service
+systemctl enable docker
 
 require_file /usr/local/sbin/grow-rootfs
 systemctl enable grow-rootfs.service
