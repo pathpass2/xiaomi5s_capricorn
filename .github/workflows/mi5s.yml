@@ -155,10 +155,30 @@ jobs:
           
           # 获取内核版本号
           KVER=$(cat linux/include/config/kernel.release)
+          echo "Kernel version: $KVER"
           
-          # 打包 linux-headers 为 tar.gz 供其他发行版使用
-          tar -czf /workdir/linux-headers-${KVER}.tar.gz -C linux/.. $(basename $(pwd))/linux-${KVER} 2>/dev/null || true
-          tar -czf /workdir/linux-headers-kernel_version-${KVER}.tar.gz -C /workdir linux-headers-*.deb 2>/dev/null || true
+          # ==========================================
+          # 参考 RK3566 的打包方式，制作真实的 linux-headers 文件夹
+          # ==========================================
+          mkdir -p /workdir/linux-headers-$KVER
+          cp -a linux/Module.symvers /workdir/linux-headers-$KVER/
+          cp -a linux/Makefile       /workdir/linux-headers-$KVER/
+          cp -a linux/scripts        /workdir/linux-headers-$KVER/
+          
+          mkdir -p /workdir/linux-headers-$KVER/arch/arm64
+          cp -a linux/arch/arm64/include /workdir/linux-headers-$KVER/arch/arm64/
+          cp -a linux/arch/arm64/kvm     /workdir/linux-headers-$KVER/arch/arm64/
+          cp -a linux/arch/arm64/Makefile /workdir/linux-headers-$KVER/arch/arm64/
+          
+          cp -a linux/include /workdir/linux-headers-$KVER/
+          cp -a linux/.config /workdir/linux-headers-$KVER/
+          
+          # 进入 workdir 打包头文件
+          cd /workdir
+          tar -zcf linux-headers-kernel_version-$KVER.tar.gz linux-headers-$KVER
+          # 删除临时文件夹以免影响后续上传
+          rm -rf linux-headers-$KVER
+          # ==========================================
           
           cp linux/arch/arm64/boot/Image.gz /workdir
           cp linux/arch/arm64/boot/Image.gz /rootfs/tmp_mkboot/
