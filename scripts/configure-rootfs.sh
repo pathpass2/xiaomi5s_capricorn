@@ -76,15 +76,15 @@ apt-get update
 apt-get install -y --no-install-recommends \
     locales \
     console-setup kbd fonts-dejavu \
-    sudo vim nano less \
-    curl ca-certificates \
+    sudo vim git vsftpd nano less \
+    curl lrzsz psmisc ca-certificates \
     openssh-server openssh-client \
     net-tools ethtool ifupdown iputils-ping \
     network-manager wpasupplicant wireless-regdb rfkill iw \
-    libpam-systemd \
-    systemd-timesyncd \
+    libpam-systemd zip unzip bzip2 \
+    systemd-timesyncd device-tree-compiler \
     htop kmod usbutils i2c-tools fdisk \
-    make zram-tools git \
+    make gcc zram-tools git \
     libevdev2 libinput10 libxkbcommon0 \
     initramfs-tools busybox \
     ncurses-term \
